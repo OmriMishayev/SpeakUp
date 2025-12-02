@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeakUp - מקום לדבר</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --primary-color: #2E86AB;
+            --secondary-color: #F6F7EB;
+            --accent-color: #E94F37;
+            --text-color: #333333;
+            --card-bg: #ffffff;
+            --chat-bg: #e5ddd5;
+            --my-msg-bg: #dcf8c6;
+        }
+
+        html { scroll-behavior: smooth; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Rubik', sans-serif; background-color: var(--secondary-color); color: var(--text-color); line-height: 1.6; height: 100vh; display: flex; flex-direction: column; }
+
+        /* --- Header --- */
+        header { background-color: #fff; padding: 0.8rem 2rem; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 10px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 1000; }
+        .header-right { display: flex; align-items: center; gap: 40px; }
+        .logo-container { display: flex; align-items: center; gap: 10px; text-decoration: none; cursor: pointer; }
+        .logo-img { height: 45px; width: auto; }
+        .site-name { font-size: 1.6rem; font-weight: 700; color: var(--primary-color); }
+        .nav-links { display: flex; gap: 25px; }
+        .nav-links a { text-decoration: none; color: #555; font-weight: 500; font-size: 1.1rem; position: relative; }
+        .nav-links a:hover { color: var(--primary-color); }
+        .donate-btn { background-color: var(--accent-color); color: white; padding: 8px 20px; border-radius: 50px; text-decoration: none; font-weight: bold; font-size: 0.95rem; box-shadow: 0 4px 6px rgba(233, 79, 55, 0.3); }
+
+        /* --- Main Content (Home) --- */
+        #home-screen { display: block; flex: 1; overflow-y: auto; } 
+        
+        .hero { text-align: center; padding: 4rem 1rem; max-width: 1000px; margin: 0 auto; }
+        .hero h1 { font-size: 2.5rem; margin-bottom: 1rem; color: #2c3e50; }
+        .cards-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem; padding: 0 1rem; margin-top: 3rem; }
+        .card { background: var(--card-bg); padding: 2rem; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; transition: transform 0.3s ease; border-top: 5px solid var(--primary-color); }
+        .card:hover { transform: translateY(-5px); }
+        .action-btn { display: inline-block; padding: 10px 30px; background-color: var(--primary-color); color: white; border-radius: 8px; text-decoration: none; font-weight: 500; margin-top: 15px; cursor: pointer; border: none; font-family: inherit; font-size: 1rem;}
+
+        /* --- Chat Interface --- */
+        #chat-screen { display: none; height: calc(100vh - 80px); flex-direction: column; background-color: var(--chat-bg); }
+        
+        .chat-header { background-color: #ededed; padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #d1d1d1; }
+        .chat-status { display: flex; align-items: center; gap: 10px; }
+        .status-dot { width: 10px; height: 10px; background-color: #25D366; border-radius: 50%; }
+        .exit-chat-btn { background: none; border: none; color: red; font-weight: bold; cursor: pointer; font-size: 1rem; }
+
+        .chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        
+        .message { max-width: 70%; padding: 10px 15px; border-radius: 10px; font-size: 0.95rem; position: relative; word-wrap: break-word; }
+        .message.system { align-self: center; background-color: #e1f5fe; color: #555; font-size: 0.85rem; padding: 5px 15px; border-radius: 20px; }
+        .message.received { align-self: flex-start; background-color: white; border-top-right-radius: 0; }
+        .message.sent { align-self: flex-end; background-color: var(--my-msg-bg); border-top-left-radius: 0; }
+        .msg-sender { font-size: 0.75rem; color: #888; display: block; margin-bottom: 3px; }
+
+        .chat-input-area { background-color: #f0f0f0; padding: 10px 20px; display: flex; gap: 10px; align-items: center; }
+        .chat-input-area input { flex: 1; padding: 12px; border-radius: 25px; border: 1px solid #ccc; outline: none; font-size: 1rem; }
+        .send-btn { background-color: var(--primary-color); color: white; border: none; padding: 12px 20px; border-radius: 50%; cursor: pointer; transition: 0.2s; }
+        .send-btn:hover { background-color: #1e5f7a; }
+
+        /* --- Login Modal (מעודכן לטופס אמיתי) --- */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; align-items: center; justify-content: center; }
+        .modal-content { background: white; padding: 2rem; border-radius: 15px; width: 90%; max-width: 350px; text-align: center; position: relative; }
+        .close-modal { position: absolute; top: 10px; left: 15px; font-size: 1.5rem; cursor: pointer; }
+        
+        /* הוספתי עיצוב לשדות הקלט */
+        .form-input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 1rem; }
+        .switch-mode { margin-top: 15px; font-size: 0.9rem; color: #666; cursor: pointer; text-decoration: underline; }
+        .error-msg { color: red; font-size: 0.9rem; margin-top: 5px; display: none; }
+
+        /* --- כפתור מצוקה צף (מוסתר בהתחלה) --- */
+        .floating-help-btn {
+            display: none;
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            width: 60px;
+            height: 60px;
+            background-color: #E94F37;
+            color: white;
+            border-radius: 50%;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 4px 15px rgba(233, 79, 55, 0.4);
+            cursor: pointer;
+            z-index: 9999;
+            animation: pulse 2s infinite;
+            transition: transform 0.3s;
+        }
+
+        .floating-help-btn:hover { transform: scale(1.1); }
+
+        /* תפריט שנפתח בלחיצה */
+        .help-menu {
+            display: none;
+            position: fixed;
+            bottom: 100px;
+            left: 30px;
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.15);
+            width: 250px;
+            z-index: 9999;
+            text-align: center;
+            border-right: 5px solid #E94F37;
+        }
+
+        .help-menu h4 { color: #333; margin-bottom: 10px; }
+        .help-menu p { font-size: 0.9rem; color: #666; margin-bottom: 15px; }
+        .help-link { display: block; margin: 8px 0; padding: 10px; background-color: #f0f0f0; border-radius: 8px; text-decoration: none; color: #333; font-weight: 500; transition: 0.2s; }
+        .help-link:hover { background-color: #e0e0e0; }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(233, 79, 55, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(233, 79, 55, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(233, 79, 55, 0); }
+        }
+        
+        .content-section { padding: 4rem 1rem; text-align: center; border-top: 1px solid #eee; background: white; }
+        .alt-bg { background-color: #eef2f5; }
+        footer { background-color: #2c3e50; color: white; text-align: center; padding: 1.5rem; margin-top: auto; }
+        
+        @media (max-width: 768px) {
+            header { flex-direction: column; gap: 15px; padding-bottom: 15px; }
+            .header-right { flex-direction: column; }
+            .donate-btn { width: 100%; text-align: center; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="header-right">
+            <div class="logo-container" onclick="location.reload()">
+                <img src="logo.png" alt="SpeakUp Logo" class="logo-img">
+                <span class="site-name">SpeakUp</span>
+            </div>
+            <nav class="nav-links">
+                <a href="#" onclick="showHomeScreen()">מקשיבים לך</a>
+                <a href="#about">מי אנחנו</a>
+                <a href="#goal">המטרה שלנו</a>
+            </nav>
+        </div>
+        <a href="#" class="donate-btn">❤ תרומות</a>
+    </header>
+
+    <main id="home-screen">
+        <section class="hero">
+            <h1>כאן מקשיבים לך.</h1>
+            <p>פלטפורמה בטוחה לשיחה, המוגנת על ידי בוט חכם.</p>
+            
+            <div class="cards-container">
+                <div class="card">
+                    <h3>👤 צ'אט אנונימי</h3>
+                    <p>לפרוק בלי להזדהות. שיחה פרטית.</p>
+                    <button class="action-btn" onclick="startAnonymous()">התחל שיחה</button>
+                </div>
+                <div class="card">
+                    <h3>😊 צ'אט מזוהה</h3>
+                    <p>התחבר עם משתמש ושוחח בפרופיל אישי.</p>
+                    <button class="action-btn" onclick="openAuthModal()">התחברות</button>
+                </div>
+                <div class="card">
+                    <h3>👥 שיחה קבוצתית</h3>
+                    <p>להצטרף לקהילה ולדבר עם מספר אנשים.</p>
+                    <button class="action-btn" onclick="openAuthModal()">מצא קבוצה</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="content-section alt-bg" id="goal">
+            <h2>המטרה שלנו 🎯</h2>
+            <p>ליצור מרחב בטוח שבו אף אחד לא מרגיש לבד.</p>
+        </section>
+
+        <section class="content-section" id="about">
+            <h2>מי אנחנו? 👋</h2>
+            <p>קבוצת יזמים צעירים שרוצים לעשות שינוי.</p>
+        </section>
+    </main>
+
+    <div id="chat-screen">
+        <div class="chat-header">
+            <div class="chat-status">
+                <span class="status-dot"></span>
+                <span id="chat-room-name">חדר צ'אט</span>
+                <span style="font-size: 0.8rem; color: #666;">(מחובר כ: <span id="display-name"></span>)</span>
+            </div>
+            <button class="exit-chat-btn" onclick="exitChat()">יציאה</button>
+        </div>
+        
+        <div class="chat-messages" id="messages-area">
+            </div>
+
+        <div class="chat-input-area">
+            <input type="text" id="msg-input" placeholder="הקלד הודעה..." onkeypress="handleEnter(event)">
+            <button class="send-btn" onclick="sendMessage()">➤</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="auth-modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeAuthModal()">&times;</span>
+            <h2 id="auth-title">התחברות</h2>
+            
+            <input type="text" id="auth-username" class="form-input" placeholder="שם משתמש">
+            <input type="password" id="auth-password" class="form-input" placeholder="סיסמה">
+            <p id="auth-error" class="error-msg"></p>
+
+            <button class="action-btn" style="width:100%" onclick="handleAuthSubmit()" id="auth-submit-btn">התחבר</button>
+            
+            <p class="switch-mode" onclick="toggleAuthMode()" id="auth-switch-text">אין לך משתמש? הירשם כאן</p>
+        </div>
+    </div>
+
+    <div id="distress-btn" class="floating-help-btn" onclick="toggleHelpMenu()">
+        <i class="fas fa-heartbeat"></i>
+    </div>
+
+    <div id="help-menu-box" class="help-menu">
+        <h4>אנחנו כאן איתך 💜</h4>
+        <p>זיהינו מצוקה. זה בסדר גמור לבקש עזרה.</p>
+        
+        <a href="tel:1201" class="help-link">
+            <i class="fas fa-phone-alt" style="color: #E94F37;"></i> חייג לער"ן (1201)
+        </a>
+        <a href="https://wa.me/972528451201" target="_blank" class="help-link">
+            <i class="fab fa-whatsapp" style="color: #25D366;"></i> צ'אט בווטסאפ
+        </a>
+        <div style="margin-top:10px; font-size:0.8rem; cursor:pointer; color:#999;" onclick="toggleHelpMenu()">סגור</div>
+    </div>
+
+    <footer>
+        <p>© 2025 SpeakUp - כל הזכויות שמורות</p>
+    </footer>
+
+    <script>
+        const socket = io();
+        let currentUser = "אורח";
+        let currentRoom = "general";
+        let isRegistering = false; // האם אנחנו במצב הרשמה או התחברות?
+
+        // 1. קבלת הודעות
+        socket.on('receive_message', function(data) {
+            const cssClass = (data.user === currentUser) ? 'sent' : 'received';
+            addMessage(cssClass, data.msg, data.user);
+        });
+
+        socket.on('system_message', function(data) {
+            addMessage('system', data.msg);
+        });
+
+        // כפתור מצוקה
+        socket.on('warning_popup', function(data) {
+            const btn = document.getElementById('distress-btn');
+            btn.style.display = 'flex';
+            addMessage('system', "המערכת זיהתה תוכן רגיש. כפתור תמיכה הופיע בצד המסך.");
+        });
+
+        // --- לוגיקת צ'אט וניווט ---
+        function startAnonymous() {
+            currentUser = "אנונימי_" + Math.floor(Math.random() * 1000);
+            startChat('anonymous');
+        }
+
+        function startChat(type) {
+            currentRoom = type === 'anonymous' ? 'anon_room' : 'member_room';
+            document.getElementById('display-name').innerText = currentUser;
+            
+            socket.emit('join', {username: currentUser, room: currentRoom});
+            
+            // מעבר מסך
+            closeAuthModal();
+            document.getElementById('home-screen').style.display = 'none';
+            document.querySelector('footer').style.display = 'none';
+            document.getElementById('chat-screen').style.display = 'flex';
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('msg-input');
+            const text = input.value;
+            if (text.trim() !== "") {
+                socket.emit('send_message', {username: currentUser, room: currentRoom, message: text});
+                input.value = "";
+            }
+        }
+
+        function handleEnter(e) { if (e.key === 'Enter') sendMessage(); }
+
+        function addMessage(type, text, senderName = "") {
+            const area = document.getElementById('messages-area');
+            const msgDiv = document.createElement('div');
+            msgDiv.classList.add('message', type);
+            if (senderName && type !== 'system') msgDiv.innerHTML = `<span class="msg-sender">${senderName}</span>${text}`;
+            else msgDiv.innerText = text;
+            area.appendChild(msgDiv);
+            area.scrollTop = area.scrollHeight;
+        }
+
+        function exitChat() {
+            if(confirm("האם לצאת מהשיחה?")) location.reload();
+        }
+
+        function showHomeScreen() {
+             if(document.getElementById('chat-screen').style.display === 'flex') exitChat();
+        }
+
+        // --- לוגיקת התחברות אמיתית (Login Logic) ---
+        function openAuthModal() {
+            document.getElementById('auth-modal').style.display = 'flex';
+        }
+        function closeAuthModal() {
+            document.getElementById('auth-modal').style.display = 'none';
+        }
+
+        // החלפה בין מצב הרשמה למצב התחברות
+        function toggleAuthMode() {
+            isRegistering = !isRegistering;
+            const title = document.getElementById('auth-title');
+            const btn = document.getElementById('auth-submit-btn');
+            const switchText = document.getElementById('auth-switch-text');
+            const error = document.getElementById('auth-error');
+            error.style.display = 'none'; // איפוס שגיאות
+
+            if (isRegistering) {
+                title.innerText = "הרשמה לאתר";
+                btn.innerText = "הירשם";
+                switchText.innerText = "יש לך כבר משתמש? התחבר";
+            } else {
+                title.innerText = "התחברות";
+                btn.innerText = "התחבר";
+                switchText.innerText = "אין לך משתמש? הירשם כאן";
+            }
+        }
+
+        // שליחת הטופס לשרת (פייתון)
+        async function handleAuthSubmit() {
+            const username = document.getElementById('auth-username').value;
+            const password = document.getElementById('auth-password').value;
+            const errorMsg = document.getElementById('auth-error');
+            
+            // בדיקה שדות ריקים
+            if (!username || !password) {
+                errorMsg.innerText = "נא למלא את כל השדות";
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            const endpoint = isRegistering ? '/register' : '/login';
+            
+            try {
+                // שליחת בקשה לשרת
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // הצלחה!
+                    currentUser = data.username;
+                    startChat('identified');
+                } else {
+                    // שגיאה (סיסמה לא נכונה וכו')
+                    errorMsg.innerText = data.message;
+                    errorMsg.style.display = 'block';
+                }
+            } catch (e) {
+                errorMsg.innerText = "שגיאה בתקשורת עם השרת";
+                errorMsg.style.display = 'block';
+            }
+        }
+
+        // תפריט עזרה צף
+        function toggleHelpMenu() {
+            const menu = document.getElementById('help-menu-box');
+            menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+        }
+    </script>
+
+</body>
+</html>
