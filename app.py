@@ -9,18 +9,20 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from authlib.integrations.flask_client import OAuth
 import google.generativeai as genai
 from datetime import datetime
-from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.middleware.proxy_fix import ProxyFix 
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'speakup_secret_key'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# מאפשר לגוגל לעבוד ב-localhost
+# תיקון ל-Render (HTTPS)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
-# --- מפתחות גוגל ---
-
+# --- המפתחות מהקובץ שהעלית (הזוג התואם) ---
+GOOGLE_CLIENT_ID = "276255877380-037ojacjsbll0kpa5ptgr2dap4bvkenf.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET = "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"
 
 oauth = OAuth(app)
 google = oauth.register(
@@ -47,7 +49,7 @@ try:
 except:
     model = genai.GenerativeModel('gemini-pro')
 
-# --- טבלאות מסד נתונים ---
+# --- טבלאות ---
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -85,7 +87,7 @@ def load_user(user_id):
 with app.app_context():
     db.create_all()
 
-# --- לוגיקת AI ---
+# --- AI Logic ---
 def check_message_with_ai(text):
     try:
         prompt = f"Analyze this message: [{text}]. Reply ONLY with: SAFE, SUICIDE, or PREDATOR."
@@ -96,7 +98,7 @@ def check_message_with_ai(text):
         return {"safe": True, "reason": "ok", "alert": None}
     except: return {"safe": True, "reason": "error", "alert": None}
 
-# --- נתיבים (Routes) ---
+# --- Routes ---
 @app.route('/')
 def index():
     try:
@@ -109,55 +111,35 @@ def index():
 @app.route('/<path:filename>')
 def serve_static(filename): return send_from_directory('.', filename)
 
-# --- הרשמה ---
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
     if User.query.filter_by(email=data['email']).first():
         return jsonify({'success': False, 'message': 'המייל תפוס'})
     
-    # המשתמש הראשון שנרשם הופך למנהל
     is_first_user = (User.query.count() == 0)
-    
     avatars = ['🐶', '🐱', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐙']
-    selected_avatar = random.choice(avatars)
-
-    new_user = User(
-        email=data['email'], 
-        nickname=data['nickname'], 
-        password=data['password'], 
-        avatar=selected_avatar, 
-        is_admin=is_first_user
-    )
-    
+    new_user = User(email=data['email'], nickname=data['nickname'], password=data['password'], 
+                    avatar=random.choice(avatars), is_admin=is_first_user)
     db.session.add(new_user)
     db.session.commit()
     login_user(new_user)
-    
-    return jsonify({'success': True, 'username': data['nickname'], 'avatar': selected_avatar, 'is_admin': is_first_user})
+    return jsonify({'success': True, 'username': data['nickname'], 'avatar': new_user.avatar, 'is_admin': is_first_user})
 
-# --- התחברות (התיקון שעשינו) ---
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
     user = User.query.filter_by(email=data['email']).first()
     
-    # בדיקה 1: המשתמש לא קיים
-    if not user:
-        return jsonify({'success': False, 'message': 'לא נמצא משתמש, אנא נסה שנית או צור/י חשבון חדש'})
+    if not user: return jsonify({'success': False, 'message': 'לא נמצא משתמש, אנא נסה שנית או צור/י חשבון חדש'})
+    if user.password != data['password']: return jsonify({'success': False, 'message': 'סיסמה שגויה'})
     
-    # בדיקה 2: סיסמה שגויה
-    if user.password != data['password']:
-        return jsonify({'success': False, 'message': 'הסיסמה שגויה, נסה שוב'})
-
-    # הצלחה
     login_user(user)
     return jsonify({'success': True, 'username': user.nickname, 'avatar': user.avatar, 'is_admin': user.is_admin})
 
 # --- גוגל ---
 @app.route('/login/google')
 def google_login():
-    # שינוי: הוספנו _scheme='https'
     redirect_uri = url_for('authorize', _external=True, _scheme='https')
     return google.authorize_redirect(redirect_uri)
 
@@ -178,49 +160,35 @@ def authorize():
     login_user(user)
     return redirect('/')
 
-# --- ניהול קבוצות ---
+# --- Groups & Chat ---
 @app.route('/api/create_group', methods=['POST'])
 @login_required
 def create_group():
     data = request.json
-    group_name = data.get('name')
-    is_public = data.get('is_public', True)
-    if Group.query.filter_by(name=group_name).first():
-        return jsonify({'success': False, 'message': 'שם הקבוצה תפוס'})
+    if Group.query.filter_by(name=data['name']).first(): return jsonify({'success': False, 'message': 'שם תפוס'})
     invite_code = str(uuid.uuid4())[:8]
-    new_group = Group(name=group_name, is_public=is_public, creator_id=current_user.id, invite_code=invite_code)
+    new_group = Group(name=data['name'], is_public=data.get('is_public', True), creator_id=current_user.id, invite_code=invite_code)
     db.session.add(new_group)
     db.session.commit()
-    return jsonify({'success': True, 'group_name': group_name, 'invite_code': invite_code})
+    return jsonify({'success': True, 'group_name': data['name'], 'invite_code': invite_code})
 
 @app.route('/api/search_groups')
 def search_groups():
-    query = request.args.get('q', '')
-    groups = Group.query.filter(Group.name.contains(query), Group.is_public == True).all()
-    results = [{'name': g.name, 'id': g.name} for g in groups]
-    return jsonify(results)
+    q = request.args.get('q', '')
+    groups = Group.query.filter(Group.name.contains(q), Group.is_public == True).all()
+    return jsonify([{'name': g.name} for g in groups])
 
-# --- פנל ניהול (Admin API) ---
 @app.route('/api/admin_stats')
 @login_required
 def admin_stats():
-    if not current_user.is_admin:
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    user_count = User.query.count()
-    msg_count = Message.query.count()
-    blocked_logs = BlockedLog.query.order_by(BlockedLog.timestamp.desc()).limit(20).all()
-    
-    logs_data = [{
-        'user': log.user_nickname,
-        'content': log.content,
-        'reason': log.reason,
-        'time': log.timestamp.strftime('%H:%M %d/%m')
-    } for log in blocked_logs]
-    
-    return jsonify({'users': user_count, 'messages': msg_count, 'logs': logs_data})
+    if not current_user.is_admin: return jsonify({'error': 'Unauthorized'}), 403
+    logs = BlockedLog.query.order_by(BlockedLog.timestamp.desc()).limit(20).all()
+    return jsonify({
+        'users': User.query.count(),
+        'messages': Message.query.count(),
+        'logs': [{'user': l.user_nickname, 'content': l.content, 'reason': l.reason, 'time': l.timestamp.strftime('%H:%M')} for l in logs]
+    })
 
-# --- SocketIO ---
 @socketio.on('join')
 def handle_join(data):
     join_room(data['room'])
@@ -233,24 +201,18 @@ def handle_typing(data):
 @socketio.on('send_message')
 def handle_message(data):
     safety = check_message_with_ai(data['message'])
-    
     if not safety['safe']:
-        # תיעוד חסימה
-        log = BlockedLog(user_nickname=data['username'], content=data['message'], reason=safety['reason'])
-        db.session.add(log)
+        db.session.add(BlockedLog(user_nickname=data['username'], content=data['message'], reason=safety['reason']))
         db.session.commit()
-
         if safety['reason'] == "harm":
             emit('receive_message', {'msg': data['message'], 'user': data['username']}, room=data['room'])
             emit('warning_popup', {'text': safety['alert']}, to=request.sid)
         else:
             emit('system_message', {'msg': f'🚫 {safety["alert"]}'}, to=request.sid)
     else:
-        new_msg = Message(sender=data['username'], room=data['room'], content=data['message'])
-        db.session.add(new_msg)
+        db.session.add(Message(sender=data['username'], room=data['room'], content=data['message']))
         db.session.commit()
         emit('receive_message', {'msg': data['message'], 'user': data['username']}, room=data['room'])
 
 if __name__ == '__main__':
-    print("SpeakUp Server Final Running on http://127.0.0.1:5000")
     socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
