@@ -1,24 +1,44 @@
 import os
 import re
-from flask import Flask, render_template_string, request, send_from_directory, jsonify
-from flask_socketio import SocketIO, emit, join_room
+import uuid
+import random
+from flask import Flask, render_template_string, request, send_from_directory, jsonify, url_for, redirect
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from authlib.integrations.flask_client import OAuth
 import google.generativeai as genai
+from datetime import datetime
 
-# --- הגדרות שרת ומסד נתונים ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'speakup_secret_key'
-# הגדרת מיקום מסד הנתונים
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# מאפשר לגוגל לעבוד ב-localhost
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
+# --- מפתחות גוגל ---
+
+
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    access_token_url='https://accounts.google.com/o/oauth2/token',
+    authorize_url='https://accounts.google.com/o/oauth2/auth',
+    api_base_url='https://www.googleapis.com/oauth2/v1/',
+    userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
+    client_kwargs={'scope': 'email profile'},
+)
 
 db = SQLAlchemy(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-# --- הגדרת ה-AI של גוגל ---
+# הגדרת ה-AI
 GOOGLE_API_KEY = "AIzaSyAt5EIux3EauqPvQCHNatMGhdRynu5g2vY"
 genai.configure(api_key=GOOGLE_API_KEY)
 try:
@@ -26,52 +46,56 @@ try:
 except:
     model = genai.GenerativeModel('gemini-pro')
 
-# --- מודל משתמש (טבלת SQL) ---
+# --- טבלאות מסד נתונים ---
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(100), unique=True, nullable=False)
-    password = db.Column(db.String(100), nullable=False) # בפרויקט אמיתי מצפינים סיסמאות
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    nickname = db.Column(db.String(50), nullable=False)
+    password = db.Column(db.String(100), nullable=True)
+    auth_type = db.Column(db.String(20), default='email')
+    avatar = db.Column(db.String(10), default='😊')
+    is_admin = db.Column(db.Boolean, default=False) 
 
-# טעינת משתמש לזיכרון
+class Group(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    is_public = db.Column(db.Boolean, default=True)
+    creator_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    invite_code = db.Column(db.String(50), unique=True)
+
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sender = db.Column(db.String(50), nullable=False)
+    room = db.Column(db.String(50), nullable=False)
+    content = db.Column(db.String(500), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+class BlockedLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_nickname = db.Column(db.String(50))
+    content = db.Column(db.String(500))
+    reason = db.Column(db.String(50))
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# --- יצירת מסד הנתונים (רץ פעם אחת בהתחלה) ---
 with app.app_context():
     db.create_all()
 
-# --- בוט ההגנה (AI) ---
+# --- לוגיקת AI ---
 def check_message_with_ai(text):
     try:
-        prompt = f"""
-        You are a safety moderator. Analyze this message: [{text}]
-        Classify it into ONE category:
-        1. 'SAFE' - Normal conversation.
-        2. 'SUICIDE' - Self-harm, depression, dying.
-        3. 'PREDATOR' - Asking for personal info (phone, address), sexual harassment, meeting up.
-        Reply ONLY with: SAFE, SUICIDE, or PREDATOR.
-        """
+        prompt = f"Analyze this message: [{text}]. Reply ONLY with: SAFE, SUICIDE, or PREDATOR."
         response = model.generate_content(prompt)
         result = response.text.strip().upper()
-        print(f"AI Check: '{text}' -> '{result}'") 
-
-        if "SUICIDE" in result:
-            return {"safe": False, "reason": "harm", "alert": "זיהינו תוכן רגיש. כפתור תמיכה זמין עבורך."}
-        if "PREDATOR" in result:
-            return {"safe": False, "reason": "predator", "alert": "נחסם עקב חשד לתוכן פוגעני."}
+        if "SUICIDE" in result: return {"safe": False, "reason": "harm", "alert": "זיהינו מצוקה. כפתור תמיכה זמין עבורך."}
+        if "PREDATOR" in result: return {"safe": False, "reason": "predator", "alert": "נחסם עקב חשד לתוכן פוגעני."}
         return {"safe": True, "reason": "ok", "alert": None}
-    except:
-        return {"safe": True, "reason": "error", "alert": None}
+    except: return {"safe": True, "reason": "error", "alert": None}
 
 # --- נתיבים (Routes) ---
-
-# טעינת לוגו ותמונות
-@app.route('/<path:filename>')
-def serve_static(filename):
-    return send_from_directory('.', filename)
-
-# דף הבית
 @app.route('/')
 def index():
     try:
@@ -79,65 +103,151 @@ def index():
         html_path = os.path.join(base_dir, 'SPEAKUP1.html')
         with open(html_path, 'r', encoding='utf-8') as f:
             return render_template_string(f.read())
-    except FileNotFoundError:
-        return "Error: SPEAKUP1.html missing"
+    except FileNotFoundError: return "Error: SPEAKUP1.html missing"
 
-# --- הרשמה והתחברות (API) ---
+@app.route('/<path:filename>')
+def serve_static(filename): return send_from_directory('.', filename)
 
+# --- הרשמה ---
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
-    username = data.get('username')
-    password = data.get('password')
+    if User.query.filter_by(email=data['email']).first():
+        return jsonify({'success': False, 'message': 'המייל תפוס'})
     
-    if User.query.filter_by(username=username).first():
-        return jsonify({'success': False, 'message': 'שם המשתמש תפוס!'})
+    # המשתמש הראשון שנרשם הופך למנהל
+    is_first_user = (User.query.count() == 0)
     
-    new_user = User(username=username, password=password)
+    avatars = ['🐶', '🐱', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐙']
+    selected_avatar = random.choice(avatars)
+
+    new_user = User(
+        email=data['email'], 
+        nickname=data['nickname'], 
+        password=data['password'], 
+        avatar=selected_avatar, 
+        is_admin=is_first_user
+    )
+    
     db.session.add(new_user)
     db.session.commit()
-    
     login_user(new_user)
-    return jsonify({'success': True, 'username': username})
+    
+    return jsonify({'success': True, 'username': data['nickname'], 'avatar': selected_avatar, 'is_admin': is_first_user})
 
+# --- התחברות (התיקון שעשינו) ---
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
-    username = data.get('username')
-    password = data.get('password')
+    user = User.query.filter_by(email=data['email']).first()
     
-    user = User.query.filter_by(username=username).first()
+    # בדיקה 1: המשתמש לא קיים
+    if not user:
+        return jsonify({'success': False, 'message': 'לא נמצא משתמש, אנא נסה שנית או צור/י חשבון חדש'})
     
-    if user and user.password == password:
-        login_user(user)
-        return jsonify({'success': True, 'username': username})
-    
-    return jsonify({'success': False, 'message': 'שם משתמש או סיסמה שגויים'})
+    # בדיקה 2: סיסמה שגויה
+    if user.password != data['password']:
+        return jsonify({'success': False, 'message': 'הסיסמה שגויה, נסה שוב'})
 
-@app.route('/logout')
+    # הצלחה
+    login_user(user)
+    return jsonify({'success': True, 'username': user.nickname, 'avatar': user.avatar, 'is_admin': user.is_admin})
+
+# --- גוגל ---
+@app.route('/login/google')
+def google_login():
+    return google.authorize_redirect(url_for('authorize', _external=True))
+
+@app.route('/authorize')
+def authorize():
+    token = google.authorize_access_token()
+    resp = google.get('userinfo')
+    user_info = resp.json()
+    email, name = user_info['email'], user_info['name']
+    
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        is_first_user = (User.query.count() == 0)
+        user = User(email=email, nickname=name, auth_type='google', password='', avatar='👤', is_admin=is_first_user)
+        db.session.add(user)
+        db.session.commit()
+    
+    login_user(user)
+    return redirect('/')
+
+# --- ניהול קבוצות ---
+@app.route('/api/create_group', methods=['POST'])
 @login_required
-def logout():
-    logout_user()
-    return jsonify({'success': True})
+def create_group():
+    data = request.json
+    group_name = data.get('name')
+    is_public = data.get('is_public', True)
+    if Group.query.filter_by(name=group_name).first():
+        return jsonify({'success': False, 'message': 'שם הקבוצה תפוס'})
+    invite_code = str(uuid.uuid4())[:8]
+    new_group = Group(name=group_name, is_public=is_public, creator_id=current_user.id, invite_code=invite_code)
+    db.session.add(new_group)
+    db.session.commit()
+    return jsonify({'success': True, 'group_name': group_name, 'invite_code': invite_code})
 
-# --- ניהול הצ'אט ---
+@app.route('/api/search_groups')
+def search_groups():
+    query = request.args.get('q', '')
+    groups = Group.query.filter(Group.name.contains(query), Group.is_public == True).all()
+    results = [{'name': g.name, 'id': g.name} for g in groups]
+    return jsonify(results)
+
+# --- פנל ניהול (Admin API) ---
+@app.route('/api/admin_stats')
+@login_required
+def admin_stats():
+    if not current_user.is_admin:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    user_count = User.query.count()
+    msg_count = Message.query.count()
+    blocked_logs = BlockedLog.query.order_by(BlockedLog.timestamp.desc()).limit(20).all()
+    
+    logs_data = [{
+        'user': log.user_nickname,
+        'content': log.content,
+        'reason': log.reason,
+        'time': log.timestamp.strftime('%H:%M %d/%m')
+    } for log in blocked_logs]
+    
+    return jsonify({'users': user_count, 'messages': msg_count, 'logs': logs_data})
+
+# --- SocketIO ---
 @socketio.on('join')
 def handle_join(data):
     join_room(data['room'])
-    emit('system_message', {'msg': f"{data['username']} הצטרף/ה לשיחה."}, room=data['room'])
+    emit('system_message', {'msg': f"{data['username']} הצטרף/ה."}, room=data['room'])
+
+@socketio.on('typing')
+def handle_typing(data):
+    emit('display_typing', {'user': data['username']}, room=data['room'], include_self=False)
 
 @socketio.on('send_message')
 def handle_message(data):
     safety = check_message_with_ai(data['message'])
+    
     if not safety['safe']:
+        # תיעוד חסימה
+        log = BlockedLog(user_nickname=data['username'], content=data['message'], reason=safety['reason'])
+        db.session.add(log)
+        db.session.commit()
+
         if safety['reason'] == "harm":
             emit('receive_message', {'msg': data['message'], 'user': data['username']}, room=data['room'])
             emit('warning_popup', {'text': safety['alert']}, to=request.sid)
         else:
             emit('system_message', {'msg': f'🚫 {safety["alert"]}'}, to=request.sid)
     else:
+        new_msg = Message(sender=data['username'], room=data['room'], content=data['message'])
+        db.session.add(new_msg)
+        db.session.commit()
         emit('receive_message', {'msg': data['message'], 'user': data['username']}, room=data['room'])
 
 if __name__ == '__main__':
-    print("AI Server + Database Running on http://127.0.0.1:5000")
+    print("SpeakUp Server Final Running on http://127.0.0.1:5000")
     socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
