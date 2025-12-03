@@ -33,7 +33,7 @@
         .nav-links { display: flex; gap: 25px; }
         .nav-links a { text-decoration: none; color: var(--text-color); font-weight: 500; cursor: pointer; }
         .admin-btn { display: none; color: red; font-weight: bold; cursor: pointer; } /* מוסתר בהתחלה */
-
+        .app-link-btn { background: #333; color: white; padding: 8px 15px; border-radius: 20px; text-decoration: none; font-size: 0.9rem; }
         .donate-btn { background-color: var(--accent); color: white; padding: 8px 20px; border-radius: 50px; text-decoration: none; font-weight: bold; font-size: 0.95rem; }
         .theme-toggle { background: none; border: none; cursor: pointer; font-size: 1.2rem; color: var(--text-color); margin-left: 10px; }
 
@@ -103,7 +103,9 @@
         <div style="display:flex; gap:15px; align-items:center;">
             <button class="theme-toggle" onclick="toggleTheme()">🌙</button>
             <a href="#" class="donate-btn">❤ תרומות</a>
+            <a href="#" onclick="show('download-screen')" class="app-link-btn">📱 SpeakUp APP</a>
         </div>
+    
     </header>
 
     <div id="admin-screen" class="screen">
