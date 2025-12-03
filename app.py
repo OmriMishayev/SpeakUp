@@ -22,13 +22,13 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 # --- המפתחות מהקובץ שהעלית (הזוג התואם) ---
 GOOGLE_CLIENT_ID = "276255877380-037ojacjsbll0kpa5ptgr2dap4bvkenf.apps.googleusercontent.com"
-GOOGLE_CLIENT_SECRET = "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"
+
 
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
     client_id=GOOGLE_CLIENT_ID,
-    client_secret=GOOGLE_CLIENT_SECRET,
+    
     access_token_url='https://accounts.google.com/o/oauth2/token',
     authorize_url='https://accounts.google.com/o/oauth2/auth',
     api_base_url='https://www.googleapis.com/oauth2/v1/',
@@ -216,3 +216,4 @@ def handle_message(data):
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
+
