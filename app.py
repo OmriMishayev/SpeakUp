@@ -9,6 +9,7 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from authlib.integrations.flask_client import OAuth
 import google.generativeai as genai
 from datetime import datetime
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'speakup_secret_key'
@@ -156,7 +157,9 @@ def login():
 # --- גוגל ---
 @app.route('/login/google')
 def google_login():
-    return google.authorize_redirect(url_for('authorize', _external=True))
+    # שינוי: הוספנו _scheme='https'
+    redirect_uri = url_for('authorize', _external=True, _scheme='https')
+    return google.authorize_redirect(redirect_uri)
 
 @app.route('/authorize')
 def authorize():
